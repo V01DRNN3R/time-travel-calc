@@ -1,0 +1,127 @@
+<div style="
+  font-family: Arial, sans-serif;
+  max-width: 420px;
+  margin: auto;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+">
+
+  <h3 style="
+    margin-bottom: 15px;
+    color: #013E75;
+    text-align: center;
+  ">
+    🚗 Travel Time Calculator
+  </h3>
+
+  <input id="from" placeholder="Start location" style="
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    outline: none;
+    font-size: 14px;
+  ">
+
+  <input id="to" placeholder="Destination" style="
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    outline: none;
+    font-size: 14px;
+  ">
+
+  <button id="calcBtn" style="
+    width: 100%;
+    padding: 12px;
+    background: #013E75;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    cursor: pointer;
+    transition: 0.2s ease;
+  "
+  onmouseover="this.style.background='#02509a'"
+  onmouseout="this.style.background='#013E75'">
+    Calculate
+  </button>
+
+  <div id="output" style="
+    margin-top: 15px;
+    padding: 12px;
+    background: #f7f9fc;
+    border-left: 4px solid #013E75;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #333;
+    min-height: 20px;
+  ">
+    Enter locations above
+  </div>
+
+</div>
+
+<script>
+async function geocode(place) {
+  const res = await fetch(
+    "https://nominatim.openstreetmap.org/search?format=json&q=" +
+    encodeURIComponent(place)
+  );
+  const data = await res.json();
+  if (!data.length) throw "Location not found";
+  return [data[0].lat, data[0].lon];
+}
+
+async function getTime(coord1, coord2) {
+  const res = await fetch(
+    "https://router.project-osrm.org/route/v1/driving/" +
+    coord1[1] + "," + coord1[0] + ";" +
+    coord2[1] + "," + coord2[0]
+  );
+  const data = await res.json();
+  if (data.code !== "Ok") throw "Route not found";
+  return data.routes[0].duration;
+}
+
+function formatTime(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return h + "h " + m + "m";
+}
+
+async function calculate() {
+  const output = document.getElementById("output");
+  const from = document.getElementById("from").value;
+  const to = document.getElementById("to").value;
+
+  if (!from || !to) {
+    output.innerHTML = "Please enter both locations";
+    return;
+  }
+
+  output.innerHTML = "Calculating...";
+
+  try {
+    const c1 = await geocode(from);
+    const c2 = await geocode(to);
+
+    const seconds = await getTime(c1, c2);
+    const minutes = seconds / 60;
+
+    output.innerHTML =
+      "<strong>One-way:</strong> " + formatTime(minutes) + "<br>" +
+      "<strong>Round trip:</strong> " + formatTime(minutes * 2);
+
+  } catch (err) {
+    output.innerHTML = "Error: " + err;
+  }
+}
+
+document.getElementById("calcBtn").addEventListener("click", calculate);
+</script>
