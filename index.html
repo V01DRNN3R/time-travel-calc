@@ -1,224 +1,298 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
+<meta charset="utf-8" />
+<title>Route Planner Pro</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 <style>
-:root{
-  --bg:#f6f7fb;
-  --panel:#fff;
-  --text:#111;
-  --accent:#0066ff;
-}
-
-body.dark{
-  --bg:#0e1220;
-  --panel:#151a2e;
-  --text:#fff;
-  --accent:#4da6ff;
-}
-
-body{
-  margin:0;
-  font-family:system-ui;
-  background:var(--bg);
-  color:var(--text);
-  display:flex;
-  height:100vh;
-}
-
-#panel{
-  width:320px;
-  background:var(--panel);
-  padding:10px;
-}
-
-input,button{
-  width:100%;
-  padding:10px;
-  margin:5px 0;
-  border-radius:8px;
-  border:1px solid #ccc;
-}
-
-body.dark input,body.dark button{
-  background:#222a44;
-  color:#fff;
-  border:1px solid #333b5c;
-}
-
-button{
-  background:var(--accent);
-  color:#fff;
-  border:none;
-}
-
-#map{flex:1;height:100vh}
-
-#output{
-  margin-top:10px;
-  padding:10px;
-  background:rgba(0,0,0,0.05);
-  border-radius:10px;
-}
-
-body.dark #output{
-  background:rgba(255,255,255,0.05);
-}
+body { margin:0; font-family: Arial, sans-serif; display:flex; flex-direction:column; min-height:100vh; }
+#topbar { padding:12px; background:#222; color:white; position:relative; }
+#controls { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
+.control-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; width:100%; }
+.control-row input { padding:10px; width:calc(100% - 100px); min-width:180px; border:1px solid #444; border-radius:4px; background:#111; color:white; }
+.control-row button { padding:10px 12px; border:none; border-radius:4px; background:#0078d4; color:white; cursor:pointer; }
+button.small { background:#555; }
+#waypoints { width:100%; display:flex; flex-direction:column; gap:8px; }
+#map { flex:1; min-height:360px; }
+#info { padding:12px; background:#111; color:#eee; font-size:14px; }
+#result { max-width:100%; }
+.autocomplete-list { position:absolute; z-index:1000; background:#000000; border:1px solid #000000; max-height:220px; overflow:auto; width:320px; box-shadow:0 4px 12px rgba(0,0,0,.25); border-radius:4px; }
+.autocomplete-item { padding:10px; cursor:pointer; border-bottom:1px solid #000000; }
+.autocomplete-item:last-child { border-bottom:none; }
+.autocomplete-item:hover { background:#2e2e2e; }
+.route-marker { background:#0078d4; color:white; font-weight:700; text-align:center; line-height:28px; border-radius:50%; width:28px; height:28px; border:2px solid white; }
+@media (max-width:720px) { #controls { flex-direction:column; } .control-row input { width:100%; } }
 </style>
 </head>
-
 <body>
-
-<div id="panel">
-<input id="from" placeholder="From">
-<input id="to" placeholder="To">
-
-<button id="go">Start navigation</button>
-<button id="dark">Toggle dark mode</button>
-<button id="car">Car mode</button>
-<button id="fs">Fullscreen</button>
-
-<div id="output">Ready</div>
+<div id="topbar">
+    <div id="controls">
+        <div class="control-row">
+            <input id="start" placeholder="Start location" autocomplete="off">
+            <button id="use-location" type="button">📍 My Location</button>
+        </div>
+        <div class="control-row">
+            <input id="end" placeholder="End location" autocomplete="off">
+            <button id="add-waypoint" class="small" type="button">+ Stop</button>
+        </div>
+        <div id="waypoints"></div>
+        <div class="control-row">
+            <button id="route-btn" type="button">Route</button>
+            <button id="clear-btn" type="button" class="small">Clear</button>
+        </div>
+    </div>
+    <div id="search-overlay" class="autocomplete-list" hidden></div>
 </div>
-
 <div id="map"></div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
+<div id="info">
+    <div id="result">Enter start and end locations, then press Route.</div>
+</div>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-let map=L.map("map").setView([52.37,4.9],7);
+const map = L.map('map').setView([52.5, 6.5], 10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution:'© OpenStreetMap'
+}).addTo(map);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+let routeLine;
+let markers = [];
+let waypointRows = [];
+let searchTimeout;
+const routerEndpoints = [
+    'https://router.project-osrm.org/route/v1/driving/',
+    'https://routing.openstreetmap.de/routed-car/route/v1/driving/'
+];
 
-let routeLayer,marker,steps=[],coords=[],watchId,currentStep=0,car=false;
+function createLocationRow() {
+    const row = document.createElement('div');
+    row.className = 'control-row';
 
-function speak(t){
-  const u=new SpeechSynthesisUtterance(t);
-  u.lang=navigator.language||"en-US";
-  speechSynthesis.cancel();
-  speechSynthesis.speak(u);
+    const input = document.createElement('input');
+    input.placeholder = 'Stop';
+    input.autocomplete = 'off';
+    input.addEventListener('input', () => scheduleSearch(input));
+    input.addEventListener('focus', () => showSearchResults(input));
+    input.addEventListener('blur', () => setTimeout(hideSearchResults, 150));
+    row.appendChild(input);
+
+    const remove = document.createElement('button');
+    remove.textContent = 'Remove';
+    remove.className = 'small';
+    remove.type = 'button';
+    remove.addEventListener('click', () => {
+        row.remove();
+        waypointRows = waypointRows.filter(r => r !== row);
+    });
+    row.appendChild(remove);
+
+    waypointRows.push(row);
+    return row;
 }
 
-function dist(a,b){
-  return Math.hypot(a[0]-b[0],a[1]-b[1]);
+function scheduleSearch(input) {
+    const query = input.value.trim();
+    if (query.length < 3) {
+        hideSearchResults();
+        return;
+    }
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => searchAddress(query, input), 250);
 }
 
-async function geo(q){
-  let r=await fetch("https://nominatim.openstreetmap.org/search?format=json&q="+encodeURIComponent(q));
-  let d=await r.json();
-  return [+d[0].lat,+d[0].lon];
+async function searchAddress(query, input) {
+    try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=6&q=${encodeURIComponent(query)}`;
+        const res = await fetch(url, { headers: { 'Accept-Language':'en' } });
+        const results = await res.json();
+        if (!results || !results.length) {
+            hideSearchResults();
+            return;
+        }
+        showAutocomplete(results, input);
+    } catch (err) {
+        hideSearchResults();
+    }
 }
 
-async function route(a,b){
-  let r=await fetch(`https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson&steps=true`);
-  let d=await r.json();
-  return d.routes[0];
+function showAutocomplete(results, input) {
+    const overlay = document.getElementById('search-overlay');
+    overlay.innerHTML = '';
+    overlay.style.width = `${input.offsetWidth}px`;
+    overlay.hidden = false;
+
+    const parentRect = overlay.parentElement.getBoundingClientRect();
+    const rect = input.getBoundingClientRect();
+    overlay.style.left = `${rect.left - parentRect.left}px`;
+    overlay.style.top = `${rect.bottom - parentRect.top}px`;
+
+    results.forEach(item => {
+        const entry = document.createElement('div');
+        entry.className = 'autocomplete-item';
+        entry.textContent = item.display_name;
+        entry.addEventListener('mousedown', () => {
+            input.value = item.display_name;
+            input.dataset.lat = item.lat;
+            input.dataset.lon = item.lon;
+            hideSearchResults();
+        });
+        overlay.appendChild(entry);
+    });
 }
 
-function snap(p){
-  let best=null,min=999;
-  coords.forEach(c=>{
-    let d=dist(p,[c[1],c[0]]);
-    if(d<min){min=d;best=c;}
-  });
-  return best?[best[1],best[0]]:p;
+function showSearchResults(input) {
+    if (input.value.trim().length >= 3) {
+        scheduleSearch(input);
+    }
 }
 
-function move(m,p){
-  let s=m.getLatLng(),t=p,start=performance.now();
-  function a(n){
-    let k=Math.min((n-start)/300,1);
-    m.setLatLng([s.lat+(t[0]-s.lat)*k,s.lng+(t[1]-s.lng)*k]);
-    if(k<1)requestAnimationFrame(a);
-  }
-  requestAnimationFrame(a);
+function hideSearchResults() {
+    const overlay = document.getElementById('search-overlay');
+    overlay.hidden = true;
 }
 
-function instruction(s){
-  let m=s.maneuver;
-  let r=s.name?`onto ${s.name}`:"";
-  if(m.type==="depart")return"Start driving "+r;
-  if(m.type==="turn")return"Turn "+(m.modifier||"")+" "+r;
-  if(m.type==="continue")return"Continue "+r;
-  if(m.type==="merge")return"Merge "+r;
-  if(m.type==="arrive")return"Arrived";
-  return"Proceed "+r;
+async function geocode(query) {
+    const coords = parseCoordinates(query);
+    if (coords) return coords;
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.length) throw new Error('Location not found: ' + query);
+    return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
 }
 
-function update(p){
-  if(!steps.length)return;
-
-  let s=steps[currentStep];
-  if(!s)return;
-
-  let c=s.maneuver.location;
-  let d=dist(p,[c[1],c[0]]);
-
-  let txt=instruction(s);
-
-  if(d<0.0006){
-    speak(txt);
-    currentStep++;
-  }
-
-  let left=s.distance>1000?(s.distance/1000).toFixed(1)+" km":Math.round(s.distance)+" m";
-
-  output.innerHTML=`<b>🧭 ${txt}</b><br>In ${left}`;
+function parseCoordinates(text) {
+    const parts = text.split(/[, ]+/).map(p => p.trim()).filter(Boolean);
+    if (parts.length === 2 && parts.every(p => /^-?\d+(\.\d+)?$/.test(p))) {
+        const lat = parseFloat(parts[0]);
+        const lon = parseFloat(parts[1]);
+        if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) return [lon, lat];
+    }
+    return null;
 }
 
-function watch(){
-  watchId=navigator.geolocation.watchPosition(pos=>{
-    let p=[pos.coords.latitude,pos.coords.longitude];
-    let s=snap(p);
-
-    if(!marker){
-      marker=L.circleMarker(s,{radius:8,color:"#0066ff"}).addTo(map);
-    }else move(marker,s);
-
-    if(car)map.setView(s,18);
-
-    update(s);
-  },null,{enableHighAccuracy:true});
+function getRouteFields() {
+    return [
+        document.getElementById('start'),
+        ...waypointRows.map(row => row.querySelector('input')),
+        document.getElementById('end')
+    ].filter(input => input && input.value.trim());
 }
 
-async function start(){
-  let a=await geo(from.value);
-  let b=await geo(to.value);
-
-  let r=await route(a,b);
-
-  steps=r.legs[0].steps;
-  coords=r.geometry.coordinates;
-
-  if(routeLayer)map.removeLayer(routeLayer);
-
-  routeLayer=L.geoJSON(r.geometry,{style:{color:"#0066ff",weight:5}}).addTo(map);
-  map.fitBounds(routeLayer.getBounds());
-
-  watch();
+async function buildCoordinates() {
+    const inputs = getRouteFields();
+    if (inputs.length < 2) throw new Error('Please enter both start and end locations.');
+    const coords = [];
+    for (const input of inputs) {
+        const value = input.value.trim();
+        const lat = input.dataset.lat;
+        const lon = input.dataset.lon;
+        if (lat && lon) {
+            coords.push([parseFloat(lon), parseFloat(lat)]);
+            continue;
+        }
+        coords.push(await geocode(value));
+    }
+    return coords;
 }
 
-go.onclick=start;
+async function calculateRoute() {
+    try {
+        setMessage('Routing…');
+        clearRoute();
+        const coords = await buildCoordinates();
+        const coordString = coords.map(c => `${c[0]},${c[1]}`).join(';');
 
-dark.onclick=()=>document.body.classList.toggle("dark");
+        let routeData;
+        for (const endpoint of routerEndpoints) {
+            const url = `${endpoint}${coordString}?overview=full&geometries=geojson`;
+            const res = await fetch(url);
+            if (!res.ok) continue;
+            const data = await res.json();
+            if (data.code === 'Ok' && data.routes && data.routes.length) {
+                routeData = data.routes[0];
+                break;
+            }
+        }
+        if (!routeData) throw new Error('Routing failed. Try different locations or refresh the page.');
 
-car.onclick=()=>{
-  car=!car;
-  map.setZoom(car?18:7);
-};
+        routeLine = L.geoJSON(routeData.geometry, { style: { color:'#0078d4', weight:5 } }).addTo(map);
+        map.fitBounds(routeLine.getBounds(), { padding:[24,24] });
 
-fs.onclick=()=>{
-  if(!document.fullscreenElement){
-    document.documentElement.requestFullscreen();
-  }else{
-    document.exitFullscreen();
-  }
-};
+        coords.forEach((coord, index) => {
+            const icon = L.divIcon({ className:'route-marker', html:`<span>${index+1}</span>`, iconSize:[28,28], iconAnchor:[14,28] });
+            const marker = L.marker([coord[1], coord[0]], { icon }).addTo(map);
+            markers.push(marker);
+        });
+
+        const km = (routeData.distance / 1000).toFixed(2);
+        const duration = Math.round(routeData.duration / 60);
+        setMessage(`➡️ One way: ${km} km · ${formatTime(duration)}<br>🔁 Round trip: ${(km * 2).toFixed(2)} km · ${formatTime(duration * 2)}`);
+    } catch (err) {
+        alert(err.message || err);
+        setMessage('Route failed. Check your start/end and try again.');
+    }
+}
+
+function clearRoute() {
+    if (routeLine) map.removeLayer(routeLine);
+    markers.forEach(marker => map.removeLayer(marker));
+    markers = [];
+}
+
+function setMessage(message) {
+    document.getElementById('result').innerHTML = message;
+}
+
+function formatTime(minutes) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return hours ? `${hours}h ${mins}m` : `${mins}m`;
+}
+
+function useLocation() {
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.');
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(position => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const startInput = document.getElementById('start');
+        startInput.value = `${lat},${lon}`;
+        map.setView([lat, lon], 13);
+        setMessage('Start location set to your current position.');
+    }, () => {
+        alert('Unable to access your location.');
+    });
+}
+
+function addWaypointRow() {
+    const row = createLocationRow();
+    document.getElementById('waypoints').appendChild(row);
+}
+
+function clearAll() {
+    document.getElementById('start').value = '';
+    document.getElementById('end').value = '';
+    waypointRows.forEach(row => row.remove());
+    waypointRows = [];
+    clearRoute();
+    setMessage('Enter start and end locations, then press Route.');
+}
+
+const startInput = document.getElementById('start');
+const endInput = document.getElementById('end');
+[startInput, endInput].forEach(input => {
+    input.addEventListener('input', () => scheduleSearch(input));
+    input.addEventListener('focus', () => showSearchResults(input));
+    input.addEventListener('blur', () => setTimeout(hideSearchResults, 150));
+});
+
+document.getElementById('add-waypoint').addEventListener('click', addWaypointRow);
+document.getElementById('route-btn').addEventListener('click', calculateRoute);
+document.getElementById('clear-btn').addEventListener('click', clearAll);
+document.getElementById('use-location').addEventListener('click', useLocation);
 </script>
-
 </body>
 </html>
