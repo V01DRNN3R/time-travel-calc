@@ -1,0 +1,23 @@
+{
+  "name": "travel-time-calculator",
+  "version": "1.0.0",
+  "description": "Route Planner Pro - A simple travel time calculator with map visualization",
+  "main": "index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/V01DRNN3R/travel-time-calc.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/V01DRNN3R/travel-time-calc/issues"
+  },
+  "homepage": "https://github.com/V01DRNN3R/travel-time-calc#readme",
+  "dependencies": {
+    "@vercel/analytics": "^2.0.1"
+  }
+}
